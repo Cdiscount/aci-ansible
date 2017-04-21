@@ -181,7 +181,7 @@ def main():
         changed = False
 
     if req.status_code == 200:
-        module.exit_json(changed = changed, response = req.text, status = req.status_code)
+        module.exit_json(changed=changed, response=req.text, status=req.status_code)
     else:
         module.fail_json(msg='error issuing api request', response=req.text, status=req.status_code)
 
