@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
-# Copyright 2015 Jason Edelman <jason@networktocode.com>
-# Network to Code, LLC
+# Copyright 2015 Jason Edelman <jason@networktocode.com>, Network to Code, LLC
+# Copyright 2017 Dag Wieers <dag@wieers.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,6 +25,10 @@ short_description: Direct access to the APIC API.
 description:
 - Offers direct access to the APIC API.
 author: Jason Edelman (@jedelman8)
+version_added: '2.4'
+requirements:
+- lxml
+- xmljson >= 0.1.8
 options:
   path:
     description:
@@ -43,10 +47,15 @@ options:
     default: GET
     choices: [ DELETE, GET, POST ]
     aliases: [ action ]
-  config_file:
+  src:
     description:
     - Name of the absolute path of the filname that includes the body
       of the http request being sent to the ACI fabric.
+    alias: [ config_file ]
+  content:
+    description:
+    - When used instead of C(src), sets the content of the API request directly.
+    - This may be convenient to template simple requests, for anything complex use the M(template) module.
   user:
     description:
     - Username used to login to the switch.
@@ -72,12 +81,14 @@ options:
     - If C(no), SSL certificates will not be validated. This should only set to C(no) used on personally controlled sites using self-signed certificates. Prior to 1.9.2 the code defaulted to C(no).
     default: 'yes'
     choices: [ 'no', 'yes' ]
+notes:
+- When using inline-JSON (using C(content)) YAML requires to start with a blank line.
 '''
 
 EXAMPLES = r'''
 - name: Add a tenant
   aci_rest:
-    config_file: /home/cisco/ansible/aci/configs/aci_config.xml
+    src: /home/cisco/ansible/aci/configs/aci_config.xml
     path: /api/mo/uni.xml
     method: POST
     host: '{{ inventory_hostname }}'
@@ -96,7 +107,7 @@ EXAMPLES = r'''
 
 - name: Configure contracts
   aci_rest:
-    config_file: /home/cisco/ansible/aci/configs/contract_config.xml
+    src: /home/cisco/ansible/aci/configs/contract_config.xml
     path: /api/mo/uni.xml
     method: POST
     host: {{ inventory_hostname }}
@@ -149,12 +160,9 @@ status:
 '''
 
 import json
-# TODO: Would be nice to use xmltodict with Abdera convention support
-#
-#import xmltodict
 import lxml.etree
-from xmljson import cobra
 import os
+from xmljson import cobra
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.pycompat24 import get_exception
@@ -204,7 +212,7 @@ def main():
             path=dict(type='str', required=True, aliases=['uri']),
             host=dict(type='str', required=True),
             method=dict(type='str', default='GET', choices=['DELETE', 'GET', 'POST'], aliases=['action']),
-            config_file=dict(type='path'),
+            src=dict(type='path', aliases=['config_file']),
             content=dict(type='str'),
             user=dict(type='str', default='admin', aliases=['username']),
             password=dict(type='str', default='C1sco12345', no_log=True),
@@ -213,12 +221,12 @@ def main():
             validate_certs=dict(type='bool', default=True),
         ),
         supports_check_mode=True,
-        mutually_exclusive=[['config_file', 'content']],
+        mutually_exclusive=[['content', 'src']],
     )
 
     path = module.params['path']
     content = module.params['content']
-    config_file = module.params['config_file']
+    src = module.params['src']
 
     protocol = module.params['protocol']
     method = module.params['method']
@@ -234,13 +242,15 @@ def main():
         output = '',
     )
 
+    # Report missing file
     file_exists = False
-    if config_file:
-        if os.path.isfile(config_file):
+    if src:
+        if os.path.isfile(src):
             file_exists = True
         else:
-            module.fail_json(msg='Cannot find/access config_file:\n%s' % config_file)
+            module.fail_json(msg='Cannot find/access src:\n%s' % src)
 
+    # Perform login first
     url = '%s://%s/api/aaaLogin.xml' % (protocol, host)
     data = "<aaaUser name='%s' pwd='%s'/>" % (user, password)
     resp, auth = fetch_url(module, url, data=data, method="POST", timeout=timeout)
@@ -255,12 +265,14 @@ def main():
         result['status'] = auth['status'],
         module.fail_json(**result)
 
+    # Prepare request data
     if content:
         result['data'] = content
     elif file_exists:
-        with open(config_file, 'r') as config_object:
+        with open(src, 'r') as config_object:
             result['data'] = config_object.read()
 
+    # Ensure changes are reported
     if method in ('DELETE', 'POST'):
         # FIXME: Hardcoding changed is not idempotent
         result['changed'] = True
@@ -271,6 +283,7 @@ def main():
     else:
         result['changed'] = False
 
+    # Find request type
     if path.find('.xml') != -1:
         rest_type = 'xml'
     elif path.find('.json') != -1:
@@ -278,6 +291,7 @@ def main():
     else:
         module.fail_json(msg='Failed to find REST API content type (neither .xml nor .json).')
 
+    # Perform actual request
     url = '%s://%s/%s' % (protocol, host, path.lstrip('/'))
     headers = dict( Cookie=resp.headers['Set-Cookie'] )
 
@@ -285,11 +299,13 @@ def main():
     result['response'] = info['msg']
     result['status'] = info['status']
 
+    # Report failure
     if info['status'] != 200:
         result.update(aci_response(info['body'], rest_type))
         result['msg'] = 'Task failed: %(aci_code)s %(aci_text)s' % result
         module.fail_json(**result)
 
+    # Report success
     result.update(aci_response(resp.read(), rest_type))
     module.exit_json(**result)
 
