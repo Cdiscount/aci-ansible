@@ -21,14 +21,16 @@ ANSIBLE_METADATA = {'metadata_version': '1.0',
 
 DOCUMENTATION = r'''
 module: aci_rest
-short_description: Direct access to the APIC API.
+short_description: Direct access to the Cisco APIC REST API.
 description:
-- Offers direct access to the APIC API.
-author: Jason Edelman (@jedelman8)
+- Enables the management of the Cisco ACI fabric through direct access to the Cisco APIC REST API.
+author:
+- Jason Edelman (@jedelman8)
+- Dag Wieers (@dagwieers)
 version_added: '2.4'
 requirements:
-- lxml
-- xmljson >= 0.1.8
+- lxml (when using XML content)
+- xmljson >= 0.1.8 (when using XML content)
 options:
   path:
     description:
@@ -78,11 +80,13 @@ options:
     default: 30
   validate_certs:
     description:
-    - If C(no), SSL certificates will not be validated. This should only set to C(no) used on personally controlled sites using self-signed certificates. Prior to 1.9.2 the code defaulted to C(no).
+    - If C(no), SSL certificates will not be validated.
+    - This should only set to C(no) used on personally controlled sites using self-signed certificates.
     default: 'yes'
     choices: [ 'no', 'yes' ]
 notes:
-- When using inline-JSON (using C(content)) YAML requires to start with a blank line.
+- When using inline-JSON (using C(content)), YAML requires to start with a blank line.
+- When using JSON as payload, no additional libraries are needed, however XML payloads require lxml and xmljson python libraries.
 '''
 
 EXAMPLES = r'''
@@ -131,7 +135,7 @@ EXAMPLES = r'''
   - '{{ apic_leavesspines }}'
   connection: local
 
-- name: Waiting for all controllers to be ready
+- name: Wait for all controllers to become ready
   aci_rest:
     path: /api/node/class/topSystem.json?query-target-filter=eq(topSystem.role,"controller")
     host: '{{ apic_ip }}'
@@ -148,21 +152,73 @@ EXAMPLES = r'''
 
 RETURN = r'''
 response:
-    description: HTTP response string
-    returned: always
-    type: string
-    sample: OK
+  description: HTTP response string
+  returned: always
+  type: string
+  sample: HTTP Error 400: Bad Request
 status:
-    description: HTTP status code
-    returned: always
-    type: int
-    sample: 200
+  description: HTTP status code
+  returned: always
+  type: int
+  sample: 400
+data:
+  description: The payload send to the APIC REST API (xml or json)
+  returned: always
+  type: string
+  sample: '<foo bar="boo"/>'
+output:
+  description: The raw output returned by the APIC REST API (xml or json)
+  returned: always
+  type: string
+  sample: '<?xml version="1.0" encoding="UTF-8"?><imdata totalCount="1"><error code="122" text="unknown managed object class foo"/></imdata>'
+aci_code:
+  description: The REST ACI return code, useful for troubleshooting on failure
+  returned: always
+  type: int
+  sample: 122
+aci_text:
+  description: The REST ACI descriptive text, useful for troubleshooting on failure
+  returned: always
+  type: string
+  sample: unknown managed object class foo
+imdata:
+  description: Converted output returned by the APIC REST (register this for post-processing)
+  returned: always
+  type: json
+  sample: |
+    [
+        {
+            "error": {
+                "attributes": {
+                    "code": "122",
+                    "text": "unknown managed object class foo"
+                }
+            }
+        }
+    ]
+totalCount:
+  description: Number of items in the imdata array
+  returned: always
+  type: int
+  sample: 0
 '''
 
 import json
-import lxml.etree
 import os
-from xmljson import cobra
+
+# Optional, only used for XML payload
+try:
+    import lxml.etree
+    HAS_LXML_ETREE = True
+except ImportError:
+    HAS_LXML_ETREE = False
+
+# Optional, only used for XML payload
+try:
+    from xmljson import cobra
+    HAS_XMLJSON_COBRA = True
+except ImportError:
+    HAS_XMLJSON_COBRA = False
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.pycompat24 import get_exception
@@ -186,7 +242,7 @@ def aci_response(rawoutput, rest_type='xml'):
             output['imdata'] = imdata['imdata']['children']
         else:
             output['imdata'] = dict()
-        output['totalCount'] = imdata['imdata']['attributes']['totalCount']
+        output['totalCount'] = int(imdata['imdata']['attributes']['totalCount'])
     elif rest_type == 'json':
         output = json.loads(rawoutput)
     else:
@@ -201,7 +257,8 @@ def aci_response(rawoutput, rest_type='xml'):
         else:
             result['aci_code'] = 0
             result['aci_text'] = 'Success'
-            result.update(output)
+
+    result.update(output)
 
     return result
 
@@ -250,6 +307,18 @@ def main():
         else:
             module.fail_json(msg='Cannot find/access src:\n%s' % src)
 
+    # Find request type
+    if path.find('.xml') != -1:
+        rest_type = 'xml'
+        if not HAS_LXML_ETREE:
+            module.fail_json(msg='The lxml python library is missing, or lacks etree support.')
+        if not HAS_XMLJSON_COBRA:
+            module.fail_json(msg='The xmljson python library is missing, or lacks cobra support.')
+    elif path.find('.json') != -1:
+        rest_type = 'json'
+    else:
+        module.fail_json(msg='Failed to find REST API content type (neither .xml nor .json).')
+
     # Perform login first
     url = '%s://%s/api/aaaLogin.xml' % (protocol, host)
     data = "<aaaUser name='%s' pwd='%s'/>" % (user, password)
@@ -282,14 +351,6 @@ def main():
             module.exit_json(response='OK (Check mode)', status=200, **result)
     else:
         result['changed'] = False
-
-    # Find request type
-    if path.find('.xml') != -1:
-        rest_type = 'xml'
-    elif path.find('.json') != -1:
-        rest_type = 'json'
-    else:
-        module.fail_json(msg='Failed to find REST API content type (neither .xml nor .json).')
 
     # Perform actual request
     url = '%s://%s/%s' % (protocol, host, path.lstrip('/'))
