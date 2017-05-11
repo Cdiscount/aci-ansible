@@ -23,7 +23,7 @@ DOCUMENTATION = r'''
 module: aci_rest
 short_description: Direct access to the Cisco APIC REST API.
 description:
-- Enables the management of the Cisco ACI fabric through direct access to the Cisco APIC REST API.
+- Enables the management of the Cisco ACI fabric through direct access to the Cisco APIC REST
 author:
 - Jason Edelman (@jedelman8)
 - Dag Wieers (@dagwieers)
@@ -224,24 +224,28 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.pycompat24 import get_exception
 from ansible.module_utils.urls import fetch_url
 
+
 # FIXME: The XML-to-JSON conversion is using the newly implemented Abdera/Cobra convention
 #        https://github.com/sanand0/xmljson/issues/16
 #        https://github.com/martinblech/xmltodict/issues/157
 def aci_response(rawoutput, rest_type='xml'):
-    output = dict()
     result = dict(
-        aci_code = -1,
-        aci_text = 'This should not happen',
-        output = rawoutput
+        aci_code=-1,
+        aci_text='This should not happen',
+        output=rawoutput,
     )
+
+    output = dict(
+        imdata=dict()
+    )
+
     if rest_type == 'xml':
         xml = lxml.etree.fromstring(rawoutput)
         imdata = cobra.data(xml)
+
         # Reformat as ACI does for JSON API output
         if 'children' in imdata['imdata']:
             output['imdata'] = imdata['imdata']['children']
-        else:
-            output['imdata'] = dict()
         output['totalCount'] = int(imdata['imdata']['attributes']['totalCount'])
     elif rest_type == 'json':
         output = json.loads(rawoutput)
@@ -261,6 +265,7 @@ def aci_response(rawoutput, rest_type='xml'):
     result.update(output)
 
     return result
+
 
 def main():
 
@@ -294,9 +299,9 @@ def main():
     password = module.params['password']
 
     result = dict(
-        changed = False,
-        data = '',
-        output = '',
+        changed=False,
+        data='',
+        output='',
     )
 
     # Report missing file
@@ -324,7 +329,7 @@ def main():
     data = "<aaaUser name='%s' pwd='%s'/>" % (user, password)
     resp, auth = fetch_url(module, url, data=data, method="POST", timeout=timeout)
 
-    if resp is None or auth['status'] >= 400:
+    if resp is None or auth['status'] != 200:
         if 'body' in auth:
             result.update(aci_response(auth['body'], 'json'))
             result['msg'] = 'Authentication failed: %(aci_code)s %(aci_text)s' % result
@@ -354,7 +359,7 @@ def main():
 
     # Perform actual request
     url = '%s://%s/%s' % (protocol, host, path.lstrip('/'))
-    headers = dict( Cookie=resp.headers['Set-Cookie'] )
+    headers = dict(Cookie=resp.headers['Set-Cookie'])
 
     resp, info = fetch_url(module, url, data=result['data'], method=method, timeout=timeout, headers=headers)
     result['response'] = info['msg']
