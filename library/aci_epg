@@ -96,6 +96,13 @@ options:
         default: null
         choices: []
         aliases: []
+    phy_domain:
+        description:
+            - desired physical domain or list of physical domains
+        required: false
+        default: null
+        choices: []
+        aliases: []
     state:
         description:
             - Desired state of the epg
@@ -161,6 +168,7 @@ EXAMPLES = '''
 
 '''
 import socket
+import q
 
 try:
     HAS_COBRA = True
@@ -209,7 +217,17 @@ def get_vmm_domains(moDir, tenant, anp, name):
     dnq.queryTarget = 'children'
     dnq.classFilter = 'fvRsDomAtt'
     vmms = moDir.query(dnq)
-    names = [str(each.tDn).split('dom-')[-1] for each in vmms if each]
+    names = [str(each.tDn).split('dom-')[-1] for each in vmms if each and re.match(r'^.*/dom-.*', str(each.tDn))]
+    return names
+
+
+def get_phy_domains(moDir, tenant, anp, name):
+    uri = 'uni/tn-{0}/ap-{1}/epg-{2}'
+    dnq = DnQuery(uri.format(tenant, anp, name))
+    dnq.queryTarget = 'children'
+    dnq.classFilter = 'fvRsDomAtt'
+    physs = moDir.query(dnq)
+    names = [str(each.tDn).split('phys-')[-1] for each in physs if each and re.match(r'^.*/phys-.*', str(each.tDn)) and str(each.instrImedcy)=='immediate' and str(each.resImedcy)=='immediate']
     return names
 
 
@@ -253,10 +271,12 @@ def get_existing_objects(moDir, tenant, anp, name):
                                            'fvRsProv')
     bridge_domain = get_bdomains(moDir, tenant, anp, name)
     vmm_domain = get_vmm_domains(moDir, tenant, anp, name)
+    phy_domain = get_phy_domains(moDir, tenant, anp, name)
     objdict = dict(consumed_contracts=consumed_contracts,
                    provided_contracts=provided_contracts,
                    bridge_domain=bridge_domain,
-                   vmm_domain=vmm_domain)
+                   vmm_domain=vmm_domain,
+                   phy_domain=phy_domain)
     return objdict
 
 
@@ -297,6 +317,10 @@ def build_object(object_type, resource_mo, each):
         RsDomAtt(
             resource_mo, tDn='uni/vmmp-VMware/dom-{0}'.format(
                 each))
+    elif object_type == 'phy_domain':
+        RsDomAtt(
+            resource_mo, tDn='uni/phys-{0}'.format(
+                each), instrImedcy='immediate', resImedcy='immediate')
 
 
 def remove_object(object_type, resource_mo, each):
@@ -309,6 +333,10 @@ def remove_object(object_type, resource_mo, each):
     elif object_type == 'vmm_domain':
         obj = RsDomAtt(
                resource_mo, tDn='uni/vmmp-VMware/dom-{0}'.format(
+                each))
+    elif object_type == 'phy_domain':
+        obj = RsDomAtt(
+               resource_mo, tDn='uni/phys-{0}'.format(
                 each))
     obj.delete()
 
@@ -326,6 +354,7 @@ def main():
             provided_contracts=dict(),
             bridge_domain=dict(),
             vmm_domain=dict(),
+            phy_domain=dict(),
             state=dict(choices=['present', 'absent'], default='present'),
             host=dict(required=True),
             username=dict(type='str', default='admin'),
@@ -354,6 +383,7 @@ def main():
     provided_contracts = normalize_to_list(module.params['provided_contracts'])
     bridge_domain = normalize_to_list(module.params['bridge_domain'])
     vmm_domain = normalize_to_list(module.params['vmm_domain'])
+    phy_domain = normalize_to_list(module.params['phy_domain'])
 
     apic = '{0}://{1}/'.format(protocol, host)
 
@@ -393,7 +423,8 @@ def main():
     proposed_objects = dict(consumed_contracts=consumed_contracts,
                             provided_contracts=provided_contracts,
                             bridge_domain=bridge_domain,
-                            vmm_domain=vmm_domain)
+                            vmm_domain=vmm_domain,
+                            phy_domain=phy_domain)
 
     delta_objects, remove_objects = get_delta_objects(proposed_objects,
                                                       existing_objects)

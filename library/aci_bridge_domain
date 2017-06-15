@@ -46,6 +46,27 @@ options:
         default: null
         choices: []
         aliases: []
+    arpflood:
+        description:
+            - ARP Flooding
+        required: false
+        default: null
+        choices: ['yes', 'no']
+        aliases: []
+    unicastroute:
+        description:
+            - Unicast Routing
+        required: false
+        default: null
+        choices: ['yes', 'no']
+        aliases: []
+    unkmacucastact:
+        description:
+            - L2 Unknown Unicast
+        required: false
+        default: null
+        choices: ['proxy', 'flood']
+        aliases: []
     tenant:
         description:
             - name of tenant this bridge domain will be part of
@@ -131,7 +152,10 @@ except ImportError as ie:
 
 BD_KEY_MAP = {
     'descr': 'descr',
-    'name': 'name'
+    'name': 'name',
+    'arpflood': 'arpFlood',
+    'unicastroute': 'unicastRoute',
+    'unkmacucastact': 'unkMacUcastAct'
 }
 SUBNET_KEY_MAP = {
     'subnet': 'ip'
@@ -148,7 +172,7 @@ def get_attributes(keymap, mo):
     return resource
 
 
-def get_bd(moDir, tenant, name):
+def get_bd(moDir, tenant, name, arpflood, unicastroute, unkmacucastact):
     mo = moDir.lookupByDn('uni/tn-{0}/BD-{1}'.format(tenant, name))
     return get_attributes(BD_KEY_MAP, mo)
 
@@ -166,11 +190,10 @@ def get_context(moDir, tenant, name):
     return dict(context=con)
 
 
-def get_existing(moDir, tenant, name, subnet):
+def get_existing(moDir, tenant, name, subnet, arpflood, unicastroute, unkmacucastact):
     existing = {}
-    bd = get_bd(moDir, tenant, name)
+    bd = get_bd(moDir, tenant, name, arpflood, unicastroute, unkmacucastact)
     if bd:
-        existing.update(bd)
         if subnet:
             sub = get_subnet(moDir, tenant, name, subnet)
             existing.update(sub)
@@ -188,6 +211,9 @@ def main():
             context=dict(type='str', required=True),
             subnet=dict(type='str'),
             descr=dict(type='str'),
+            arpflood=dict(choices=['yes', 'no']),
+            unicastroute=dict(choices=['yes', 'no']),
+            unkmacucastact=dict(choices=['proxy', 'flood']),
             state=dict(choices=['present', 'absent'], default='present'),
             host=dict(required=True),
             username=dict(type='str', default='admin'),
@@ -210,6 +236,9 @@ def main():
     name = module.params['name']
     tenant = module.params['tenant']
     descr = module.params['descr']
+    arpflood = module.params['arpflood']
+    unicastroute = module.params['unicastroute']
+    unkmacucastact = module.params['unkmacucastact']
     context = module.params['context']
     subnet = module.params['subnet']
 
@@ -227,9 +256,9 @@ def main():
     if not context_mo:
         print module.fail_json(msg='context needs to be created first')
 
-    existing = get_existing(moDir, tenant, name, subnet)
+    existing = get_existing(moDir, tenant, name, subnet, arpflood, unicastroute, unkmacucastact)
 
-    args = dict(name=name, descr=descr, subnet=subnet, context=context)
+    args = dict(name=name, descr=descr, subnet=subnet, context=context, arpflood=arpflood, unicastroute=unicastroute, unkmacucastact=unkmacucastact)
 
     proposed = dict((k, v) for k, v in args.iteritems() if v is not None)
 
@@ -273,7 +302,7 @@ def main():
             config_req = ConfigRequest()
             config_req.addMo(new_mo)
             moDir.commit(config_req)
-            results['new'] = get_existing(moDir, tenant, name, subnet)
+            results['new'] = get_existing(moDir, tenant, name, subnet, arpflood, unicastroute, unkmacucastact)
 
     results['proposed'] = proposed
     results['existing'] = existing
